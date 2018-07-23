@@ -3,30 +3,62 @@ import torch.nn as nn
 import torch.nn.functional as F
 from plot import LinePlot
 
-class OnlineContrastiveLoss(nn.Module):
+class SoftHingeTripletLoss(nn.Module):
+    """Hard/Hardest Triplet Loss
+    (pytorch implementation of https://omoindrot.github.io/triplet-loss)
+    For each anchor, we get the hardest positive and hardest negative to form a triplet.
     """
-    Online Contrastive loss
-    Takes a batch of embeddings and corresponding labels.
-    Pairs are generated using pair_selector object that take embeddings and targets and return indices of positive
-    and negative pairs
-    """
-
-    def __init__(self, margin, pair_selector):
-        super(OnlineContrastiveLoss, self).__init__()
+    def __init__(self, margin=0.2, squared=False):
+        """
+        Args:
+            margin: margin for triplet loss
+            hardest: If true, loss is considered only hardest triplets.
+            squared: If true, output is the pairwise squared euclidean distance matrix.
+                If false, output is the pairwise euclidean distance matrix.
+        """
+        super(HardTripletLoss, self).__init__()
         self.margin = margin
-        self.pair_selector = pair_selector
+        self.squared = squared
+        self.plot = LinePlot('Triplet stats')
+        self.plot.register_plot('positive distance', 'Iter', 'pos dist')
+        self.plot.register_plot('negative distance', 'Iter', 'neg dist')
+        self.iter = 0
 
-    def forward(self, embeddings, target):
-        positive_pairs, negative_pairs = self.pair_selector.get_pairs(embeddings, target)
-        if embeddings.is_cuda:
-            positive_pairs = positive_pairs.cuda()
-            negative_pairs = negative_pairs.cuda()
-        positive_loss = (embeddings[positive_pairs[:, 0]] - embeddings[positive_pairs[:, 1]]).pow(2).sum(1)
-        negative_loss = F.relu(
-            self.margin - (embeddings[negative_pairs[:, 0]] - embeddings[negative_pairs[:, 1]]).pow(2).sum(
-                1).sqrt()).pow(2)
-        loss = torch.cat([positive_loss, negative_loss], dim=0)
-        return loss.mean()
+    def forward(self, embeddings, labels):
+        """
+        Args:
+            labels: labels of the batch, of size (batch_size,)
+            embeddings: tensor of shape (batch_size, embed_dim)
+        Returns:
+            triplet_loss: scalar tensor containing the triplet loss
+        """
+        pairwise_dist = _pairwise_distance(embeddings, squared=self.squared)
+        self.iter = self.iter + 1
+
+        # Get the hardest positive pairs
+        mask_anchor_positive = _get_anchor_positive_triplet_mask(labels).float()
+        valid_positive_dist = pairwise_dist * mask_anchor_positive
+        hardest_positive_dist, _ = torch.max(valid_positive_dist, dim=1, keepdim=True)
+
+        # Get the hardest negative pairs
+        mask_anchor_negative = _get_anchor_negative_triplet_mask(labels).float()
+        max_anchor_negative_dist, _ = torch.max(pairwise_dist, dim=1, keepdim=True)
+        anchor_negative_dist = pairwise_dist + max_anchor_negative_dist * (
+                1.0 - mask_anchor_negative)
+        hardest_negative_dist, _ = torch.min(anchor_negative_dist, dim=1, keepdim=True)
+
+        # Combine biggest d(a, p) and smallest d(a, n) into final triplet loss
+        dist_diff = hardest_positive_dist - hardest_negative_dist
+
+        if dist_diff < self.margin:
+            triplet_loss = F.relu(hardest_positive_dist - hardest_negative_dist + self.margin)
+        else:
+            triplet_loss = 4 * dist_diff
+
+        self.plot.update_plot('positive distance', self.iter, hardest_positive_dist.mean().item())
+        self.plot.update_plot('negative distance', self.iter, hardest_negative_dist.mean().item())
+        triplet_loss = torch.mean(triplet_loss)
+        return triplet_loss
 
 class HardTripletLoss(nn.Module):
     """Hard/Hardest Triplet Loss
@@ -75,7 +107,7 @@ class HardTripletLoss(nn.Module):
             hardest_negative_dist, _ = torch.min(anchor_negative_dist, dim=1, keepdim=True)
 
             # Combine biggest d(a, p) and smallest d(a, n) into final triplet loss
-            triplet_loss = F.relu(hardest_positive_dist - hardest_negative_dist + 0.1)
+            triplet_loss = F.relu(hardest_positive_dist - hardest_negative_dist + self.margin)
             self.plot.update_plot('positive distance', self.iter, hardest_positive_dist.mean().item())
             self.plot.update_plot('negative distance', self.iter, hardest_negative_dist.mean().item())
             triplet_loss = torch.mean(triplet_loss)
