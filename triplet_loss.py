@@ -16,7 +16,7 @@ class SoftHingeTripletLoss(nn.Module):
             squared: If true, output is the pairwise squared euclidean distance matrix.
                 If false, output is the pairwise euclidean distance matrix.
         """
-        super(HardTripletLoss, self).__init__()
+        super(SoftHingeTripletLoss, self).__init__()
         self.margin = margin
         self.squared = squared
         self.plot = LinePlot('Triplet stats')
@@ -49,11 +49,12 @@ class SoftHingeTripletLoss(nn.Module):
 
         # Combine biggest d(a, p) and smallest d(a, n) into final triplet loss
         dist_diff = hardest_positive_dist - hardest_negative_dist
+        dist_diff_mask = dist_diff < self.margin
+        triplet_loss = dist_diff.new(dist_diff.size()).fill_(0)
 
-        if dist_diff < self.margin:
-            triplet_loss = F.relu(hardest_positive_dist - hardest_negative_dist + self.margin)
-        else:
-            triplet_loss = 4 * dist_diff
+        triplet_loss[dist_diff_mask] = F.relu(hardest_positive_dist[dist_diff_mask] 
+                - hardest_negative_dist[dist_diff_mask] + self.margin)
+        triplet_loss[~dist_diff_mask] = 4 * dist_diff[~dist_diff_mask]
 
         self.plot.update_plot('positive distance', self.iter, hardest_positive_dist.mean().item())
         self.plot.update_plot('negative distance', self.iter, hardest_negative_dist.mean().item())
