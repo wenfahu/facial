@@ -54,7 +54,7 @@ class SoftHingeTripletLoss(nn.Module):
 
         triplet_loss[dist_diff_mask] = F.relu(hardest_positive_dist[dist_diff_mask] 
                 - hardest_negative_dist[dist_diff_mask] + self.margin) ** 2
-        triplet_loss[~dist_diff_mask] = 4 * dist_diff[~dist_diff_mask]
+        triplet_loss[~dist_diff_mask] = 4.0* self.margin * dist_diff[~dist_diff_mask]
 
         self.plot.update_plot('positive distance', self.iter, hardest_positive_dist.mean().item())
         self.plot.update_plot('negative distance', self.iter, hardest_negative_dist.mean().item())
